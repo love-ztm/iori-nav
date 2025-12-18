@@ -206,20 +206,26 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   });
   
-  function updateHeading(keyword) {
+  function updateHeading(keyword, activeCatalog, count) {
     const heading = document.querySelector('[data-role="list-heading"]');
     if (!heading) return;
     
-    const visibleCount = sitesGrid?.querySelectorAll('.site-card:not(.hidden)').length || 0;
-    const defaultText = heading.dataset.default || '';
-    const activeText = heading.dataset.active || '';
+    // 如果没有传入 count，尝试从 DOM 中实时获取
+    const visibleCount = (count !== undefined) ? count : (sitesGrid?.querySelectorAll('.site-card:not(.hidden)').length || 0);
+    const defaultText = heading.dataset.default || '全部收藏';
     
     if (keyword) {
       heading.textContent = `搜索结果 · ${visibleCount} 个网站`;
-    } else if (activeText) {
-      heading.textContent = `${activeText} · ${visibleCount} 个网站`;
+    } else if (activeCatalog) {
+      heading.textContent = `${activeCatalog} · ${visibleCount} 个网站`;
+      heading.dataset.active = activeCatalog; // 保存当前激活分类名
     } else {
-      heading.textContent = defaultText;
+      const activeText = heading.dataset.active || '';
+      if (activeText) {
+          heading.textContent = `${activeText} · ${visibleCount} 个网站`;
+      } else {
+          heading.textContent = defaultText.includes('·') ? defaultText : `${defaultText} · ${visibleCount} 个网站`;
+      }
     }
   }
   
@@ -241,20 +247,25 @@ document.addEventListener('DOMContentLoaded', function() {
   const moreBtn = document.getElementById('horizontalMoreBtn');
   const dropdown = document.getElementById('horizontalMoreDropdown');
   
+  // Define these globally within the scope so updateNavigationState can use them
   let checkOverflow = () => {};
+  let resetNav = () => {};
 
   if (navContainer && moreBtnContainer && dropdown) {
-    // Move all items back to nav function
-    const resetNav = () => {
+    resetNav = () => {
         const dropdownItems = Array.from(dropdown.children);
         dropdownItems.forEach(item => {
-            item.classList.remove('block', 'w-full', 'text-left', 'px-4', 'py-2', 'hover:bg-gray-100', 'text-gray-700', 'font-bold', 'text-primary-600', 'bg-gray-50', 'bg-primary-600', 'text-white');
-            item.classList.add('inline-flex', 'items-center', 'px-4', 'py-2', 'rounded-full', 'text-sm', 'transition-all', 'duration-200', 'whitespace-nowrap');
-            
-            // Restore original class
+            // Restore wrapper styles if saved
             if (item.dataset.originalClass) {
                 item.className = item.dataset.originalClass;
             }
+            
+            // Restore inner link styles
+            const link = item.querySelector('a');
+            if (link && link.dataset.originalClass) {
+                link.className = link.dataset.originalClass;
+            }
+
             navContainer.appendChild(item);
         });
         moreBtnContainer.classList.add('hidden');
@@ -279,7 +290,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         
         if (firstWrappedIndex === -1) {
-            // No wrapping detected, everything fits on one line.
             moreBtnContainer.classList.add('hidden');
             dropdown.classList.add('hidden');
             return; 
@@ -308,23 +318,20 @@ document.addEventListener('DOMContentLoaded', function() {
 
         // Move wrapped items to dropdown
         itemsToMove.forEach(item => {
-            // Save original class
+            // Save wrapper class
             if (!item.dataset.originalClass) {
                 item.dataset.originalClass = item.className;
             }
             
-            // Check active state
-            const isActive = item.classList.contains('font-semibold');
+            // Wrapper becomes a block item in dropdown
+            // Ensure relative positioning for submenus
+            item.className = 'menu-item-wrapper block w-full relative'; 
             
-            // Apply dropdown styling
-            item.classList.remove('inline-flex', 'items-center', 'rounded-full', 'whitespace-nowrap');
-            
-            if (isActive) {
-                item.classList.add('block', 'w-full', 'text-left', 'px-4', 'py-2', 'text-sm', 'rounded-md', 'font-bold', 'bg-primary-600', 'text-white');
-                item.classList.remove('text-gray-700', 'hover:bg-gray-50');
-            } else {
-                item.classList.add('block', 'w-full', 'text-left', 'px-4', 'py-2', 'text-sm', 'hover:bg-gray-50', 'rounded-md', 'text-gray-700');
-                item.classList.remove('font-bold', 'bg-primary-600', 'text-white');
+            // Adjust inner link style
+            const link = item.querySelector('a');
+            if (link) {
+                if (!link.dataset.originalClass) link.dataset.originalClass = link.className;
+                link.className = 'dropdown-item w-full text-left px-4 py-2 text-sm';
             }
             
             dropdown.appendChild(item);
@@ -334,7 +341,9 @@ document.addEventListener('DOMContentLoaded', function() {
     // Initial check
     setTimeout(checkOverflow, 100);
     window.addEventListener('resize', () => {
-        checkOverflow();
+        // Debounce
+        clearTimeout(window.resizeTimer);
+        window.resizeTimer = setTimeout(checkOverflow, 100);
     });
 
     // Toggle Dropdown
@@ -369,23 +378,22 @@ document.addEventListener('DOMContentLoaded', function() {
     e.preventDefault();
     const href = link.getAttribute('href');
     const catalogId = link.getAttribute('data-id');
-    const catalogName = link.textContent.trim();
     
-    // 如果在移动端，点击后关闭侧边栏
+    // 优先使用 data-name (横向菜单可能没有), 其次 textContent
+    // 但侧边栏现在有 svg，text content 会包含换行符。需要 trim。
+    let catalogName = link.textContent.trim();
+    
     if (typeof closeSidebarMenu === 'function') {
         closeSidebarMenu();
     }
     
-    // 视觉反馈
     const sitesGrid = document.getElementById('sitesGrid');
     if (!sitesGrid) return;
 
-    // 渐隐动画
     sitesGrid.style.transition = 'opacity 0.15s ease-out';
     sitesGrid.style.opacity = '0';
 
     try {
-        // 构造 API URL
         let apiUrl = '/api/config?pageSize=10000';
         if (catalogId) {
             apiUrl += `&catalogId=${catalogId}`;
@@ -397,20 +405,13 @@ document.addEventListener('DOMContentLoaded', function() {
         
         if (data.code !== 200) throw new Error(data.message || 'API 错误');
         
-        // 等待渐隐动画完成
         await new Promise(resolve => setTimeout(resolve, 150));
 
-        // 重置网格透明度（卡片会通过动画逐个进入）
         sitesGrid.style.transition = 'none';
         sitesGrid.style.opacity = '1';
 
-        // 渲染站点
         renderSites(data.data);
-
-        // 更新标题
         updateHeading(null, catalogId ? catalogName : null, data.data.length);
-
-        // 更新导航激活状态
         updateNavigationState(href);
 
     } catch (err) {
@@ -423,15 +424,12 @@ document.addEventListener('DOMContentLoaded', function() {
       const sitesGrid = document.getElementById('sitesGrid');
       if (!sitesGrid) return;
       
-      // 从当前 DOM 中检测布局设置
       const isFrosted = document.body.innerHTML.includes('frosted-glass-effect'); 
       const previousContent = sitesGrid.innerHTML;
       const hadFrosted = previousContent.includes('frosted-glass-effect');
       
-      // 检测网格列数
       const isFiveCols = sitesGrid.className.includes('xl:grid-cols-5');
       
-      // 检测隐藏元素设置（通过启发式方法检测）
       const firstCard = sitesGrid.querySelector('.site-card');
       const hideDesc = firstCard && !firstCard.querySelector('p.line-clamp-2');
       const hideLinks = firstCard && !firstCard.querySelector('.copy-btn');
@@ -445,14 +443,12 @@ document.addEventListener('DOMContentLoaded', function() {
       }
 
       sites.forEach((site, index) => {
-        // 安全处理属性值
         const safeName = escapeHTML(site.name || '未命名');
         const safeUrl = normalizeUrl(site.url);
         const safeDesc = escapeHTML(site.desc || '暂无描述');
         const safeCatalog = escapeHTML(site.catelog || '未分类');
         const cardInitial = (safeName.charAt(0) || '站').toUpperCase();
         
-        // Logo 处理
         let logoHtml = '';
         if (site.logo) {
              logoHtml = `<img src="${escapeHTML(site.logo)}" alt="${safeName}" class="w-10 h-10 rounded-lg object-cover bg-gray-100">`;
@@ -460,7 +456,6 @@ document.addEventListener('DOMContentLoaded', function() {
              logoHtml = `<div class="w-10 h-10 rounded-lg bg-primary-600 flex items-center justify-center text-white font-semibold text-lg shadow-inner">${cardInitial}</div>`;
         }
         
-        // 条件渲染部分
         const descHtml = hideDesc ? '' : `<p class="mt-2 text-sm text-gray-600 leading-relaxed line-clamp-2" title="${safeDesc}">${safeDesc}</p>`;
         
         const hasValidUrl = !!safeUrl;
@@ -481,7 +476,6 @@ document.addEventListener('DOMContentLoaded', function() {
                   ${safeCatalog}
                 </span>`;
         
-        // 样式类处理
         const frostedClass = hadFrosted ? 'frosted-glass-effect' : '';
         const baseCardClass = hadFrosted
             ? 'site-card group rounded-xl overflow-hidden transition-all' 
@@ -489,7 +483,6 @@ document.addEventListener('DOMContentLoaded', function() {
         
         const card = document.createElement('div');
         card.className = `${baseCardClass} ${frostedClass} card-anim-enter`;
-        // 设置交错动画延迟，最多处理前 20 个项目以避免等待过长
         const delay = Math.min(index, 20) * 30; 
         card.style.animationDelay = `${delay}ms`;
         
@@ -517,7 +510,6 @@ document.addEventListener('DOMContentLoaded', function() {
         
         sitesGrid.appendChild(card);
         
-        // 重新绑定复制按钮事件
         const copyBtn = card.querySelector('.copy-btn');
         if (copyBtn) {
             copyBtn.addEventListener('click', function(e) {
@@ -529,7 +521,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 navigator.clipboard.writeText(url).then(() => {
                     showCopySuccess(this);
                 }).catch(() => {
-                    // 备用复制方案
                     const textarea = document.createElement('textarea');
                     textarea.value = url;
                     textarea.style.position = 'fixed';
@@ -542,69 +533,74 @@ document.addEventListener('DOMContentLoaded', function() {
         }
       });
   }
-  
+
   function updateNavigationState(href) {
-        // 更新横向菜单
-        const currentNav = document.getElementById('horizontalCategoryNav');
-        const dropdown = document.getElementById('horizontalMoreDropdown');
-        
-        if (currentNav) {
-            const allLinks = [
-                ...Array.from(currentNav.querySelectorAll('a')),
-                ...(dropdown ? Array.from(dropdown.querySelectorAll('a')) : [])
-            ];
-            
-            const getHref = (el) => el.getAttribute('href');
-            let oldActive = null;
-            let newActive = null;
-
-            // 查找旧的和新的激活项
-            allLinks.forEach(link => {
-                if (getHref(link) === href) {
-                    newActive = link;
-                } else if (link.classList.contains('font-semibold') && (link.classList.contains('bg-primary-600') || link.classList.contains('text-primary-700'))) {
-                    // 基于类名识别当前激活的项目
-                    oldActive = link;
-                }
-            });
-
-            if (newActive && oldActive && newActive !== oldActive) {
-                // 确保 originalClass 已设置
-                if (!oldActive.dataset.originalClass) oldActive.dataset.originalClass = oldActive.className;
-                if (!newActive.dataset.originalClass) newActive.dataset.originalClass = newActive.className;
-
-                // 交换存储在 originalClass 中的“菜单栏状态”类名
-                const activeStateClass = oldActive.dataset.originalClass;
-                const inactiveStateClass = newActive.dataset.originalClass;
-
-                oldActive.dataset.originalClass = inactiveStateClass;
-                newActive.dataset.originalClass = activeStateClass;
-                
-                // 立即应用类名，以便视觉状态更新，且 checkOverflow 能获取到正确的宽度和样式
-                oldActive.className = inactiveStateClass;
-                newActive.className = activeStateClass;
-            }
-            
-             // 重新检查溢出情况，以重新分配项目并根据新的激活状态应用下拉菜单/菜单栏样式
-             if (typeof checkOverflow === 'function') checkOverflow();
-        }
-        
-        // 更新侧边栏
-        const sidebar = document.getElementById('sidebar');
-        if (sidebar) {
-            const links = sidebar.querySelectorAll('a[href^="?catalog="]');
-            links.forEach(link => {
-                 if (link.getAttribute('href') === href) {
-                     link.className = 'flex items-center px-3 py-2 rounded-lg bg-secondary-100 text-primary-700 w-full';
-                     const svg = link.querySelector('svg');
-                     if(svg) svg.className = 'h-5 w-5 mr-2 text-primary-600';
-                 } else {
-                     link.className = 'flex items-center px-3 py-2 rounded-lg hover:bg-gray-100 w-full';
-                     const svg = link.querySelector('svg');
-                     if(svg) svg.className = 'h-5 w-5 mr-2 text-gray-400';
-                 }
-            });
-        }
+      // 1. Reset everything to main container first
+      if (resetNav) resetNav();
+      
+      // 2. Update states on standard nav items
+      const navContainer = document.getElementById('horizontalCategoryNav');
+      if (navContainer) {
+          const links = navContainer.querySelectorAll('a.nav-btn, a.dropdown-item');
+          links.forEach(link => {
+              const linkHref = link.getAttribute('href');
+              if (linkHref === href) {
+                  link.classList.remove('inactive');
+                  link.classList.add('active', 'nav-item-active');
+              } else {
+                  link.classList.remove('active', 'nav-item-active');
+                  link.classList.add('inactive');
+              }
+              link.dataset.originalClass = link.className;
+          });
+          
+          // Parent highlighting
+          const topWrappers = Array.from(navContainer.children);
+          topWrappers.forEach(wrapper => {
+              const topLink = wrapper.querySelector(':scope > a.nav-btn'); 
+              if (!topLink) return;
+              
+              if (href !== topLink.getAttribute('href')) {
+                  const subLink = wrapper.querySelector(`a[href="${href}"]`);
+                  if (subLink) {
+                      topLink.classList.remove('inactive');
+                      topLink.classList.add('active', 'nav-item-active');
+                      topLink.dataset.originalClass = topLink.className;
+                  }
+              }
+          });
+      }
+      
+      // 3. Re-calculate overflow
+      if (checkOverflow) checkOverflow();
+      
+      // Update Sidebar (Vertical Menu)
+      const sidebar = document.getElementById('sidebar');
+      if (sidebar) {
+          const links = sidebar.querySelectorAll('a[href^="?catalog="]');
+          links.forEach(link => {
+               const svg = link.querySelector('svg');
+               if (link.getAttribute('href') === href) {
+                   // Active state
+                   link.classList.remove('hover:bg-gray-100', 'text-gray-700');
+                   link.classList.add('bg-secondary-100', 'text-primary-700');
+                   
+                   if (svg) {
+                       svg.classList.remove('text-gray-400');
+                       svg.classList.add('text-primary-600');
+                   }
+               } else {
+                   // Inactive state
+                   link.classList.remove('bg-secondary-100', 'text-primary-700');
+                   link.classList.add('hover:bg-gray-100', 'text-gray-700');
+                   
+                   if (svg) {
+                       svg.classList.remove('text-primary-600');
+                       svg.classList.add('text-gray-400');
+                   }
+               }
+          });
+      }
   }
 
   // 辅助函数
